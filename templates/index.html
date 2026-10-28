@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Password Manager{% endblock %}
+{% block content %}
+<section class="hero">
+<p class="eyebrow">PRIVATE BY DESIGN</p>
+<h1>Your passwords.<br><span>Encrypted before storage.</span></h1>
+<p>This prototype stores vault entries as ciphertext. Your browser encrypts each entry before sending it to the server.</p>
+<div class="actions"><a class="button" href="{{ url_for('register') }}">Create account</a><a class="button secondary" href="{{ url_for('login') }}">Sign in</a></div>
+
+</section>
+{% endblock %}

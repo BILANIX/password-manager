@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Your vault · Password Manager{% endblock %}
+{% block head %}<script src="{{ url_for('static', filename='js/argon2-bundled.min.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/vault.js') }}" defer></script>{% endblock %}
+{% block content %}
+<section class="vault-heading"><div><p class="eyebrow">YOUR PRIVATE VAULT</p><h1>Hello, {{ session.get('username')|e }}</h1><p>Entries are encrypted in this browser before being saved.</p></div></section>
+<section class="panel">
+<h2>Add a vault entry</h2>
+<form id="entry-form">
+<label for="vault-key">Vault encryption password</label><input id="vault-key" type="password" autocomplete="off" minlength="12" required>
+<p class="hint">For this prototype, use the same vault password each time you open/decrypt entries. It is not sent to the server.</p>
+<label for="entry-title">Entry name</label><input id="entry-title" maxlength="120" required placeholder="e.g. Email account">
+<label for="entry-username">Username / email</label><input id="entry-username" maxlength="250" autocomplete="off">
+<label for="entry-password">Password / secret</label><input id="entry-password" maxlength="2000" autocomplete="new-password" required>
+<label for="entry-url">Website URL (optional)</label><input id="entry-url" maxlength="1000" type="url" placeholder="https://example.com">
+<button class="button" type="submit">Encrypt and save</button><span id="form-status" role="status"></span>
+</form></section>
+<section class="panel"><h2>Saved entries</h2>
+{% if entries %}
+<div class="entry-list">{% for entry in entries %}
+<article class="entry" data-entry-id="{{ entry['id'] }}" data-payload="{{ entry['encrypted_payload']|e }}">
+<div><strong>Encrypted entry #{{ entry['id'] }}</strong><p class="ciphertext">{{ entry['encrypted_payload'][:90] }}{% if entry['encrypted_payload']|length > 90 %}…{% endif %}</p><small>Saved {{ entry['created_at'] }}</small></div>
+<div class="entry-actions"><button type="button" class="button secondary decrypt-button">Decrypt</button><button type="button" class="button danger delete-button">Delete</button></div>
+<pre class="decrypted" hidden></pre>
+</article>
+{% endfor %}</div>
+{% else %}<p id="empty-state">No entries yet. Add one above.</p>{% endif %}
+</section>
+{% endblock %}
