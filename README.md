@@ -1,74 +1,54 @@
-# Web-Based Password Manager — Checkpoint 2
+# Web-Based Secure Password Manager — Checkpoint 2
 
-## Current Implementation
+## Overview
 
-- Flask web application with an SQLite database.
-- Account registration and login.
-- Account master passwords hashed using Argon2id through `argon2-cffi`.
-- Session cookies configured with `HttpOnly` and `SameSite=Strict`, with a 30-minute session lifetime.
-- Stable Flask secret key stored locally in `instance/.flask_secret_key`, with restrictive file permissions.
-- Browser-side vault encryption using AES-256-GCM before encrypted entries are sent to the server.
-- Browser-side vault-key derivation using Argon2id, with time cost 3, memory cost 64 MiB, and parallelism 1.
-- Random salt and 96-bit nonce for vault encryption.
-- Backward compatibility for entries encrypted using the earlier PBKDF2-SHA256 key-derivation implementation.
-- Server-side storage of encrypted vault payloads rather than plaintext vault entry contents.
-- User-specific authorization checks when listing, saving, and deleting vault entries.
-- CSRF protection for forms and state-changing requests.
-- Login rate limiting of five POST requests per minute.
-- Security response headers, including Content Security Policy, `X-Content-Type-Options`, `X-Frame-Options`, and `Referrer-Policy`.
-- Locally bundled browser-side Argon2 library at `static/js/argon2-bundled.min.js`.
-- SQLite foreign-key enforcement for application database connections.
+This Flask application provides account authentication, a browser-encrypted password vault, and server-side encrypted file storage.
 
-## Security Design
+### Implemented functionality
 
-Account authentication and vault encryption serve different purposes.
+- Account registration and login. Account master passwords are hashed with Argon2id (`argon2-cffi`); plaintext account passwords are not stored.
+- Session management with HttpOnly, SameSite=Strict, Secure cookies and a 30-minute session lifetime.
+- CSRF protection for HTML forms and JavaScript API requests.
+- Login rate limiting (5 POST attempts per minute per client address).
+- Browser-side password-vault encryption using AES-256-GCM. Each entry has a random salt and IV; the browser derives its key using PBKDF2-HMAC-SHA-256 (600,000 iterations). The server stores the encrypted payload and does not receive the vault encryption password.
+- Server-side file encryption and decryption. Uploaded files (up to 10 MB) are encrypted with Fernet before being written to the application's private storage directory. Downloading a file requires an authenticated session and decrypts it on the server.
+- Per-user access control for vault entries and uploaded files.
+- Basic security response headers and SQLite persistence.
 
-The account master password is hashed using Argon2id on the server for login verification. Vault entries are encrypted in the browser using AES-256-GCM, with a key derived from the vault encryption password using Argon2id.
+## Important security notes
 
-The browser sends the encrypted payload to Flask. The server stores this payload and does not need the plaintext vault entry contents to save or delete entries.
+The account login password uses Argon2id. The separate browser vault key currently uses PBKDF2-HMAC-SHA-256, not Argon2id; this is disclosed rather than presented as Argon2id. The browser-encrypted vault and server-encrypted file storage are separate features with different trust models.
 
-Vault entries are associated with individual user accounts, and database queries restrict access to the authenticated user's entries.
+The server-side file-encryption key is created at `instance/.file_encryption_key` and is required to decrypt uploaded files. Keep this file private and back it up securely. If it is lost, encrypted files cannot be recovered. The key is stored separately from the encrypted files but on the same application host, so this is at-rest protection, not protection against a fully compromised server.
 
-The application uses CSRF protection, login rate limiting, session cookie security settings, and security response headers to provide additional protection.
+The development server uses HTTPS with a temporary self-signed certificate. The browser will show a certificate warning on first visit; this is expected for local development. This prototype is for coursework and should not be used to store real credentials.
 
-## Local Development
+## Run on macOS or Linux
 
-The development server uses HTTP on localhost. `SESSION_COOKIE_SECURE=False` is intended only for local HTTP development. A deployed HTTPS application should enable secure cookies and use an appropriate production configuration.
-
-The Flask development server currently uses debug mode. Debug mode must be disabled before deployment.
-
-The rate limiter currently uses in-memory storage. This is sufficient for local development and demonstration, but a deployed application should use a suitable persistent or shared storage backend.
-
-This project is a coursework prototype, not a production-ready password manager.
-
-## Run on macOS
+Python 3.10 or newer is recommended.
 
 ```bash
-cd ~/password-manager
+cd password-manager
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python app.py
 ```
 
-Open [http://127.0.0.1:5000](http://127.0.0.1:5000).
+Open **https://127.0.0.1:5000**. Accept the browser's local self-signed-certificate warning to access the development application.
 
-## Test Flow
+On first start, the application creates the `instance/` directory, the SQLite database, a persistent Flask secret key, and a persistent file-encryption key. Do not delete the two key files if you need to retain existing sessions or decrypt previously uploaded files.
 
-1. Register an account using a username and account master password of at least 12 characters.
-2. Log in using the account credentials.
-3. Enter a vault encryption password, fill in a test entry, and click **Encrypt and save**.
-4. Confirm that the vault displays the encrypted payload rather than the original entry contents.
-5. Enter the same vault encryption password and click **Decrypt** to verify that the entry can be decrypted.
-6. Delete the test entry.
-7. Log out and confirm that the vault requires authentication.
-8. Restart the application and confirm that the account and stored data remain available.
+## Main application flow
 
-Use fake credentials when testing.
+1. Register with a username and a master password of at least 12 characters.
+2. Log in to open the vault.
+3. Add a password entry and choose a separate vault encryption password. The entry is encrypted in the browser before it is sent to the server.
+4. Enter the same vault encryption password to decrypt and view a saved entry. Entries can also be deleted.
+5. In **Encrypted file storage**, upload a file (maximum 10 MB). The server encrypts it before saving it. Use **Decrypt & download** to retrieve the original file.
+6. Log out using the navigation link.
 
-## Remaining Improvements
+## Dependencies
 
-- Add automated tests for authentication, authorization, encryption-related workflows, and error handling.
-- Improve error handling and logging.
-- Prepare and test a production deployment configuration with HTTPS, secure cookies, debug mode disabled, and an appropriate rate-limit storage backend.
-- Review the complete application for additional security and usability improvements.
+All Python dependencies are listed in `requirements.txt`. No external database server or database GUI is required; the application uses SQLite.

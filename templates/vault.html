@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Your vault · Password Manager{% endblock %}
-{% block head %}<script src="{{ url_for('static', filename='js/argon2-bundled.min.js') }}" defer></script>
-<script src="{{ url_for('static', filename='js/vault.js') }}" defer></script>{% endblock %}
+{% block head %}<script src="{{ url_for('static', filename='js/vault.js') }}" defer></script>{% endblock %}
 {% block content %}
 <section class="vault-heading"><div><p class="eyebrow">YOUR PRIVATE VAULT</p><h1>Hello, {{ session.get('username')|e }}</h1><p>Entries are encrypted in this browser before being saved.</p></div></section>
 <section class="panel">
@@ -25,5 +24,31 @@
 </article>
 {% endfor %}</div>
 {% else %}<p id="empty-state">No entries yet. Add one above.</p>{% endif %}
+</section>
+<section class="panel">
+<h2>Encrypted file storage</h2>
+<p>Files are encrypted by the server before being written to disk. Maximum file size: 10 MB.</p>
+<form method="post" action="{{ url_for('upload_file') }}" enctype="multipart/form-data">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label for="file-upload">Choose a file</label>
+<input id="file-upload" type="file" name="file" required>
+<button class="button" type="submit">Encrypt and upload</button>
+</form>
+{% if files %}
+<div class="entry-list">
+{% for file in files %}
+<article class="entry">
+<div><strong>{{ file['filename'] }}</strong><p class="ciphertext">Encrypted on server · {{ file['size'] }} bytes</p></div>
+<div class="entry-actions">
+<a class="button secondary" href="{{ url_for('download_file', file_id=file['id']) }}">Decrypt &amp; download</a>
+<form method="post" action="{{ url_for('delete_file', file_id=file['id']) }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<button class="button danger" type="submit">Delete</button>
+</form>
+</div>
+</article>
+{% endfor %}
+</div>
+{% else %}<p>No files uploaded yet.</p>{% endif %}
 </section>
 {% endblock %}

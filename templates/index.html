@@ -6,6 +6,6 @@
 <h1>Your passwords.<br><span>Encrypted before storage.</span></h1>
 <p>This prototype stores vault entries as ciphertext. Your browser encrypts each entry before sending it to the server.</p>
 <div class="actions"><a class="button" href="{{ url_for('register') }}">Create account</a><a class="button secondary" href="{{ url_for('login') }}">Sign in</a></div>
-
+<p class="notice">Prototype note: browser-side key derivation currently uses Web Crypto PBKDF2. Checkpoint 1 specifies Argon2id for vault key derivation, which remains a follow-up implementation task.</p>
 </section>
 {% endblock %}
