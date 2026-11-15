@@ -1,11 +1,12 @@
-import os, json, sqlite3, secrets, uuid, base64
+import os, json, sqlite3, secrets, uuid, base64, logging
+from logging.handlers import RotatingFileHandler
 from io import BytesIO
 from pathlib import Path
-from datetime import timedelta
-from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, g, send_file
+from datetime import timedelta, datetime, timezone
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, g, send_file, has_request_context
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from flask_wtf.csrf import CSRFProtect
+from flask_wtf.csrf import CSRFProtect, CSRFError
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from cryptography.fernet import Fernet, InvalidToken
@@ -19,6 +20,57 @@ FILE_KEY_PATH = os.path.join(INSTANCE_DIR, ".file_encryption_key")
 os.makedirs(INSTANCE_DIR, mode=0o700, exist_ok=True)
 os.makedirs(FILES_DIR, mode=0o700, exist_ok=True)
 app_max_upload_bytes = 10 * 1024 * 1024
+
+# Security logs are stored outside the web root and contain event metadata only.
+# Passwords, session cookies, encryption keys, and vault contents are never logged.
+SECURITY_LOG_PATH = os.path.join(INSTANCE_DIR, "security.log")
+
+
+class SecurityJsonFormatter(logging.Formatter):
+    def format(self, record):
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname,
+            "event": getattr(record, "event", "application_event"),
+            "message": record.getMessage(),
+        }
+        for field in ("remote_addr", "user_id", "path"):
+            value = getattr(record, field, None)
+            if value is not None:
+                entry[field] = value
+        if record.exc_info:
+            entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(entry, ensure_ascii=False)
+
+
+security_logger = logging.getLogger("password_manager.security")
+security_logger.setLevel(logging.INFO)
+security_logger.propagate = False
+
+if not any(
+    isinstance(handler, RotatingFileHandler)
+    and getattr(handler, "baseFilename", None) == os.path.abspath(SECURITY_LOG_PATH)
+    for handler in security_logger.handlers
+):
+    security_handler = RotatingFileHandler(
+        SECURITY_LOG_PATH, maxBytes=1_000_000, backupCount=5, encoding="utf-8"
+    )
+    security_handler.setFormatter(SecurityJsonFormatter())
+    security_logger.addHandler(security_handler)
+    os.chmod(SECURITY_LOG_PATH, 0o600)
+
+
+def log_security_event(level, event):
+    """Write a metadata-only security event; never pass secrets or user content."""
+    details = {
+        "event": event,
+        "remote_addr": request.remote_addr if has_request_context() else None,
+        "user_id": session.get("user_id") if has_request_context() else None,
+        "path": request.path if has_request_context() else None,
+    }
+    security_logger.log(level, event, extra=details)
+
+
 
 SECRET_KEY_PATH = os.path.join(BASE_DIR, "instance", ".flask_secret_key")
 
@@ -123,6 +175,51 @@ def security_headers(response):
     )
     return response
 
+
+@app.errorhandler(CSRFError)
+def handle_csrf_error(error):
+    log_security_event(logging.WARNING, "csrf_validation_failed")
+    if request.path.startswith("/api/"):
+        return jsonify(error="Request could not be verified"), 400
+    return "Request could not be verified. Refresh the page and try again.", 400
+
+
+@app.errorhandler(404)
+def handle_not_found(_error):
+    return "The requested resource was not found.", 404
+
+
+@app.errorhandler(413)
+def handle_request_too_large(_error):
+    log_security_event(logging.WARNING, "request_size_limit_exceeded")
+    return "The uploaded request is too large.", 413
+
+
+@app.errorhandler(429)
+def handle_rate_limit(_error):
+    log_security_event(logging.WARNING, "rate_limit_exceeded")
+    return "Too many requests. Please wait and try again.", 429
+
+
+@app.errorhandler(500)
+def handle_internal_error(error):
+    original = getattr(error, "original_exception", None)
+    if original is not None:
+        security_logger.error(
+            "unhandled_application_exception",
+            extra={
+                "event": "unhandled_application_exception",
+                "remote_addr": request.remote_addr if has_request_context() else None,
+                "user_id": session.get("user_id") if has_request_context() else None,
+                "path": request.path if has_request_context() else None,
+            },
+            exc_info=(type(original), original, original.__traceback__),
+        )
+    else:
+        log_security_event(logging.ERROR, "internal_server_error")
+    return "An internal error occurred. Please try again later.", 500
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -132,8 +229,14 @@ def register():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
-        if len(username) < 3 or len(username) > 80:
-            flash("Username must be between 3 and 80 characters.")
+        if (
+            not 3 <= len(username) <= 80
+            or not all(
+                ch.isascii() and (ch.isalnum() or ch in "_.-")
+                for ch in username
+            )
+        ):
+            flash("Username must be 3-80 characters and contain only letters, numbers, dots, underscores, or hyphens.")
             return render_template("register.html")
         if len(password) < 12:
             flash("Use a master password with at least 12 characters.")
@@ -145,8 +248,10 @@ def register():
             )
             get_db().commit()
         except sqlite3.IntegrityError:
+            log_security_event(logging.WARNING, "registration_duplicate_username")
             flash("That username is already registered.")
             return render_template("register.html")
+        log_security_event(logging.INFO, "account_registered")
         flash("Account created. You can now sign in.")
         return redirect(url_for("login"))
     return render_template("register.html")
@@ -165,12 +270,14 @@ def login():
         except VerifyMismatchError:
             valid = False
         if not valid:
+            log_security_event(logging.WARNING, "login_failed")
             flash("Invalid username or master password.")
             return render_template("login.html")
         session.clear()
         session["user_id"] = user["id"]
         session["username"] = username
         session.permanent = True
+        log_security_event(logging.INFO, "login_succeeded")
         return redirect(url_for("vault"))
     return render_template("login.html")
 
@@ -197,6 +304,7 @@ def add_entry():
         (session["user_id"], encrypted_payload)
     )
     get_db().commit()
+    log_security_event(logging.INFO, "vault_entry_created")
     return jsonify(id=cursor.lastrowid), 201
 
 @app.route("/api/entries/<int:entry_id>", methods=["DELETE"])
@@ -209,7 +317,9 @@ def delete_entry(entry_id):
     )
     get_db().commit()
     if cursor.rowcount == 0:
+        log_security_event(logging.WARNING, "vault_entry_delete_not_found_or_not_owned")
         return jsonify(error="Entry not found"), 404
+    log_security_event(logging.INFO, "vault_entry_deleted")
     return jsonify(ok=True)
 
 @app.route("/files", methods=["POST"])
@@ -234,6 +344,7 @@ def upload_file():
     with open(destination, "xb") as encrypted_file:
         encrypted_file.write(encrypted)
     os.chmod(destination, 0o600)
+    log_security_event(logging.INFO, "file_uploaded_and_encrypted")
     flash("File encrypted on the server and saved.")
     return redirect(url_for("vault"))
 
@@ -249,7 +360,9 @@ def download_file(file_id):
         data = json.loads(file_cipher.decrypt(Path(path).read_bytes()).decode("utf-8"))
         content = base64.b64decode(data["content"], validate=True)
     except (OSError, InvalidToken, ValueError, KeyError):
+        log_security_event(logging.WARNING, "file_download_not_found_or_not_owned")
         return "File not found", 404
+    log_security_event(logging.INFO, "file_downloaded")
     return send_file(BytesIO(content), as_attachment=True, download_name=data["filename"], mimetype="application/octet-stream")
 
 
@@ -263,13 +376,16 @@ def delete_file(file_id):
     try:
         os.remove(path)
     except FileNotFoundError:
+        log_security_event(logging.WARNING, "file_delete_not_found_or_not_owned")
         return "File not found", 404
+    log_security_event(logging.INFO, "file_deleted")
     flash("Encrypted file deleted.")
     return redirect(url_for("vault"))
 
 
 @app.route("/logout", methods=["POST"])
 def logout():
+    log_security_event(logging.INFO, "user_logged_out")
     session.clear()
     return redirect(url_for("index"))
 

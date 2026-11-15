@@ -1,4 +1,4 @@
-# Web-Based Secure Password Manager — Checkpoint 2
+# Web-Based Secure Password Manager — Checkpoint 3
 
 ## Overview
 
@@ -14,6 +14,18 @@ This Flask application provides account authentication, a browser-encrypted pass
 - Server-side file encryption and decryption. Uploaded files (up to 10 MB) are encrypted with Fernet before being written to the application's private storage directory. Downloading a file requires an authenticated session and decrypts it on the server.
 - Per-user access control for vault entries and uploaded files.
 - Basic security response headers and SQLite persistence.
+
+
+## Checkpoint 3 security improvements
+
+- Global CSRF enforcement on state-changing requests, including HTML forms and JavaScript API calls.
+- Username allowlist validation.
+- Per-user authorization checks for vault entries and encrypted files.
+- Structured JSON security logging and generic error responses.
+- Security checks for CSRF rejection, SQL injection, XSS, input validation, and cross-user access.
+
+Security test results and known limitations are documented in
+`docs/checkpoint3-security-evidence.md`.
 
 ## Important security notes
 
